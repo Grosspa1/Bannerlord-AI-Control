@@ -8,5 +8,6 @@
 !bl-dev.ps1
 !docs/
 !docs/AGENT_HANDOFF.md
+!docs/AGENT_WORLD.md
 !module/
 !module/SubModule.xml
