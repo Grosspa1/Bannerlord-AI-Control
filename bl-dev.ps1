@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Root = 'C:\Users\Public\BannerlordControllerBuild'
+$Root = $PSScriptRoot
 $BridgeRoot = 'C:\Users\Public\BannerlordBridge'
 $GameRoot = 'C:\Program Files (x86)\Steam\steamapps\common\Mount & Blade II Bannerlord'
 $InstalledDll = Join-Path $GameRoot 'Modules\BannerlordStrategicBridge\bin\Win64_Shipping_Client\BannerlordStrategicBridge.dll'
@@ -44,13 +44,21 @@ switch ($Action) {
         else { Write-Host 'state.json not present.' }
     }
 
-    'sync' { Invoke-Git pull --ff-only origin main }
+    'sync' {
+        Invoke-Git pull --ff-only
+    }
 
     'build' {
         Assert-Tool $Csc 'C# compiler'
         Assert-Tool $Rsp 'compile response file'
-        & $Csc /noconfig "@$Rsp"
-        if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
+        Push-Location $Root
+        try {
+            & $Csc /noconfig "@$Rsp"
+            if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE" }
+        }
+        finally {
+            Pop-Location
+        }
         if (!(Test-Path $BuiltDll)) { throw 'Compiler returned success but output DLL is missing.' }
         Write-Host "Built $BuiltDll"
     }
@@ -87,16 +95,23 @@ switch ($Action) {
     'push' {
         if (!(Test-Path (Join-Path $Root '.git'))) { throw 'Repository is not initialized.' }
         $message = if ($Args -and $Args.Count -gt 0) { $Args -join ' ' } else { 'Update Bannerlord strategic bridge' }
-        & $Git -C $Root add -- .gitignore README.md SubModule.cs compile_mono20.rsp blctl.py bl-dev.ps1 docs/AGENT_HANDOFF.md module/SubModule.xml
+
+        & $Git -C $Root add -A
         if ($LASTEXITCODE -ne 0) { throw 'git add failed.' }
+
         & $Git -C $Root diff --cached --quiet
         if ($LASTEXITCODE -eq 1) {
             & $Git -C $Root commit -m $message
             if ($LASTEXITCODE -ne 0) { throw 'git commit failed.' }
-        } elseif ($LASTEXITCODE -ne 0) { throw 'git diff failed.' }
-        else { Write-Host 'Nothing new to commit.' }
+        } elseif ($LASTEXITCODE -ne 0) {
+            throw 'git diff failed.'
+        } else {
+            Write-Host 'Nothing new to commit.'
+        }
 
-        & $Git -C $Root push origin main
+        $branch = (& $Git -C $Root rev-parse --abbrev-ref HEAD).Trim()
+        if ([string]::IsNullOrWhiteSpace($branch) -or $branch -eq 'HEAD') { throw 'Cannot push detached HEAD.' }
+        & $Git -C $Root push -u origin $branch
         if ($LASTEXITCODE -ne 0) { throw 'git push failed.' }
     }
 }

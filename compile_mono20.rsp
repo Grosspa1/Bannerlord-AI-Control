@@ -1,7 +1,7 @@
 /nologo
 /target:library
 /nostdlib+
-/out:C:\Users\Public\BannerlordControllerBuild\BannerlordStrategicBridge.mono20.dll
+/out:BannerlordStrategicBridge.mono20.dll
 /reference:"C:\Program Files (x86)\Steam\steamapps\common\Mount & Blade II Bannerlord\bin\Win64_Shipping_Client\mono\lib\mono\4.7.1-api\mscorlib.dll"
 /reference:"C:\Program Files (x86)\Steam\steamapps\common\Mount & Blade II Bannerlord\bin\Win64_Shipping_Client\mono\lib\mono\4.7.1-api\System.dll"
 /reference:"C:\Program Files (x86)\Steam\steamapps\common\Mount & Blade II Bannerlord\bin\Win64_Shipping_Client\mono\lib\mono\4.7.1-api\System.Core.dll"
@@ -10,5 +10,5 @@
 /reference:"C:\Program Files (x86)\Steam\steamapps\common\Mount & Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.Library.dll"
 /reference:"C:\Program Files (x86)\Steam\steamapps\common\Mount & Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.Core.dll"
 /reference:"C:\Program Files (x86)\Steam\steamapps\common\Mount & Blade II Bannerlord\bin\Win64_Shipping_Client\TaleWorlds.ObjectSystem.dll"
-"C:\Users\Public\BannerlordControllerBuild\SubModule.cs"
-"C:\Users\Public\BannerlordControllerBuild\SubModule.State.cs"
+"SubModule.cs"
+"SubModule.State.cs"
