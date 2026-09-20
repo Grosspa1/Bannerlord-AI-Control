@@ -3,10 +3,12 @@
 !.gitignore
 !README.md
 !SubModule.cs
+!SubModule.State.cs
 !compile_mono20.rsp
 !blctl.py
 !bl-dev.ps1
 !docs/
 !docs/AGENT_HANDOFF.md
+!docs/AGENT_STATE.md
 !module/
 !module/SubModule.xml

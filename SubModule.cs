@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
@@ -60,7 +60,7 @@ namespace BannerlordStrategicBridge
 
             try
             {
-                AtomicWriteAllText(StatePath, BuildState());
+                AtomicWriteAllText(StatePath, BuildStrategicStateV3());
             }
             catch (Exception ex)
             {
