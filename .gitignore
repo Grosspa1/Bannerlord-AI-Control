@@ -1,0 +1,12 @@
+# This build directory also contains reverse-engineering scratch files.
+*
+!.gitignore
+!README.md
+!SubModule.cs
+!compile_mono20.rsp
+!blctl.py
+!bl-dev.ps1
+!docs/
+!docs/AGENT_HANDOFF.md
+!module/
+!module/SubModule.xml
