@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
@@ -16,24 +16,41 @@ namespace BannerlordStrategicBridge
         private const string ResponsePath = Root + @"\response.json";
         private const string StatePath = Root + @"\state.json";
         private const string LogPath = Root + @"\bridge.log";
+        private const string JournalRoot = Root + @"\journal";
+        private const string ResponseArchiveRoot = Root + @"\responses";
         private DateTime _lastPoll = DateTime.MinValue;
         private string _lastCommandId = "";
+        private static string _sessionId = "";
+        private static string _pendingCommandId = "";
+        private static string _pendingVerb = "";
+        private static string _pendingArg = "";
+        private static string _pendingRaw = "";
+        private static string _pendingPhase = "";
+        private static DateTime _pendingStartedUtc = DateTime.MinValue;
+        private static bool _pendingSawBusy;
+        private static bool _pendingSkipIssued;
+        private static bool _pendingSimulationReleased;
 
         protected override void OnSubModuleLoad()
         {
             base.OnSubModuleLoad();
             Directory.CreateDirectory(Root);
-            Log("Bannerlord Strategic Bridge loaded.");
+            Directory.CreateDirectory(ResponseArchiveRoot);
+            Directory.CreateDirectory(JournalRoot);
+            _sessionId = Guid.NewGuid().ToString("N");
+            Log("Bannerlord Strategic Bridge loaded. session=" + _sessionId);
         }
 
         protected override void OnApplicationTick(float dt)
-        {            base.OnApplicationTick(dt);
+        {
+            base.OnApplicationTick(dt);
             if ((DateTime.UtcNow - _lastPoll).TotalMilliseconds < 350.0)
                 return;
             _lastPoll = DateTime.UtcNow;
 
             try
             {
+                AdvancePendingOperation();
                 ProcessCommand();
             }
             catch (Exception ex)
@@ -43,7 +60,7 @@ namespace BannerlordStrategicBridge
 
             try
             {
-                File.WriteAllText(StatePath, BuildState(), Encoding.UTF8);
+                AtomicWriteAllText(StatePath, BuildState());
             }
             catch (Exception ex)
             {
@@ -60,6 +77,97 @@ namespace BannerlordStrategicBridge
             }
             catch { }
         }
+        private static void AtomicWriteAllText(string path, string text)
+        {
+            string tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            byte[] bytes = Encoding.UTF8.GetBytes(text ?? "");
+            try
+            {
+                using (FileStream fs = new FileStream(tmp, FileMode.CreateNew,
+                    FileAccess.Write, FileShare.Read, 4096, FileOptions.WriteThrough))
+                {
+                    fs.Write(bytes, 0, bytes.Length);
+                    fs.Flush(true);
+                }
+                if (File.Exists(path))
+                    File.Replace(tmp, path, null);
+                else
+                    File.Move(tmp, path);
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tmp))
+                        File.Delete(tmp);
+                }
+                catch { }
+            }
+        }
+
+        private static string TryReadShared(string path)
+        {
+            if (!File.Exists(path))
+                return null;
+            try
+            {
+                using (FileStream fs = new FileStream(path, FileMode.Open,
+                    FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (StreamReader sr = new StreamReader(fs, Encoding.UTF8, true))
+                    return sr.ReadToEnd();
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }
+
+        private static string SafeFileToken(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "empty";
+            StringBuilder b = new StringBuilder();
+            for (int i = 0; i < value.Length; i++)
+            {
+                char c = value[i];
+                if (char.IsLetterOrDigit(c) || c == '-' || c == '_')
+                    b.Append(c);
+                else
+                    b.Append('_');
+            }
+            return b.ToString();
+        }
+
+        private static string PayloadKey(string raw)
+        {
+            return Convert.ToBase64String(Encoding.UTF8.GetBytes(raw ?? ""));
+        }
+
+        private static string JournalFilePath(string id)
+        {
+            return Path.Combine(JournalRoot, SafeFileToken(id) + ".txt");
+        }
+
+        private static void WriteJournal(string id, string status, string raw)
+        {
+            AtomicWriteAllText(JournalFilePath(id),
+                (id ?? "") + "\t" + (status ?? "") + "\t" + PayloadKey(raw) +
+                Environment.NewLine);
+        }
+
+        private static string[] ReadJournal(string id)
+        {
+            string raw = TryReadShared(JournalFilePath(id));
+            if (string.IsNullOrWhiteSpace(raw))
+                return null;
+            return raw.Trim().Split('\t');
+        }
+
+        private string ResponseArchivePath(string id)
+        {
+            return Path.Combine(ResponseArchiveRoot, SafeFileToken(id) + ".json");
+        }
+
         private static Type FindType(string fullName)
         {
             Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
@@ -636,7 +744,10 @@ namespace BannerlordStrategicBridge
             object main = GetStatic("TaleWorlds.CampaignSystem.Party.MobileParty", "MainParty");            object enc = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter", "Current");
             object encParty = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter", "EncounteredParty");
             object battle = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter", "Battle");
+            object simulation = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter", "CurrentBattleSimulation");
             object mission = GetStatic("TaleWorlds.MountAndBlade.Mission", "Current");
+            object saveHandler = GetProp(campaign, "SaveHandler");
+            object activeGameState = GetActiveGameState();
             object partyBase = PartyBaseOf(main);
             object memberRoster = GetProp(main, "MemberRoster");
             object prisonRoster = GetProp(main, "PrisonRoster");
@@ -646,8 +757,18 @@ namespace BannerlordStrategicBridge
 
             StringBuilder b = new StringBuilder();
             b.Append("{");
-            b.Append("\"bridge_version\":\"0.2\",");
+            b.Append("\"bridge_version\":\"0.3-runtime\",");
             b.Append("\"updated_utc\":").Append(J(DateTime.UtcNow.ToString("o"))).Append(",");
+            b.Append("\"session_id\":").Append(J(_sessionId)).Append(",");
+            b.Append("\"runtime\":{");
+            b.Append("\"busy\":").Append(_pendingCommandId.Length > 0 ? "true" : "false").Append(",");
+            b.Append("\"command_id\":").Append(J(_pendingCommandId)).Append(",");
+            b.Append("\"verb\":").Append(J(_pendingVerb)).Append(",");
+            b.Append("\"phase\":").Append(J(_pendingPhase)).Append(",");
+            b.Append("\"active_game_state\":").Append(J(activeGameState == null ? "" : activeGameState.GetType().FullName)).Append(",");
+            b.Append("\"save_busy\":").Append(BoolValue(GetProp(saveHandler, "IsSaving")) ? "true" : "false").Append(",");
+            b.Append("\"active_save_slot\":").Append(J(Convert.ToString(GetStatic("TaleWorlds.Core.MBSaveLoad", "ActiveSaveSlotName"), CultureInfo.InvariantCulture)));
+            b.Append("},");
             b.Append("\"campaign_loaded\":").Append(campaign != null ? "true" : "false").Append(",");
             b.Append("\"time_mode\":").Append(J(Convert.ToString(GetProp(campaign, "TimeControlMode"), CultureInfo.InvariantCulture))).Append(",");
             b.Append("\"mission_active\":").Append(mission != null ? "true" : "false").Append(",");
@@ -696,6 +817,9 @@ namespace BannerlordStrategicBridge
             b.Append("\"encounter\":{");
             b.Append("\"active\":").Append(enc != null ? "true" : "false").Append(",");
             b.Append("\"battle_ready\":").Append(battle != null ? "true" : "false").Append(",");
+            b.Append("\"state\":").Append(J(Convert.ToString(GetProp(enc, "EncounterState"), CultureInfo.InvariantCulture))).Append(",");
+            b.Append("\"simulation_active\":").Append(simulation != null ? "true" : "false").Append(",");
+            b.Append("\"simulation_finished\":").Append(BoolValue(GetProp(simulation, "IsSimulationFinished")) ? "true" : "false").Append(",");
             b.Append("\"party\":").Append(J(ReadName(encParty))).Append(",");
             b.Append("\"party_size\":").Append(RosterCount(GetProp(encParty, "MobileParty"), "MemberRoster"));
             b.Append("},");
@@ -958,25 +1082,55 @@ namespace BannerlordStrategicBridge
             return "Left settlement.";
         }
 
+        private static object InvokeStaticNoArg(string typeName, string methodName)
+        {
+            Type t = FindType(typeName);
+            if (t == null) throw new TypeLoadException(typeName);
+            MethodInfo m = t.GetMethod(methodName,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
+                null, Type.EmptyTypes, null);
+            if (m == null) throw new MissingMethodException(typeName, methodName);
+            return m.Invoke(null, null);
+        }
+
+        private static object InvokeOneString(object target, string methodName, string arg)
+        {
+            if (target == null) throw new InvalidOperationException("Target is null.");
+            MethodInfo m = target.GetType().GetMethod(methodName,
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                null, new Type[] { typeof(string) }, null);
+            if (m == null) throw new MissingMethodException(target.GetType().FullName, methodName);
+            return m.Invoke(target, new object[] { arg });
+        }
+
         private static string DoSurrender()
         {
             object enc = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter", "Current");
             if (enc == null) throw new InvalidOperationException("No active player encounter.");
-            InvokeNoArg(enc, "PlayerSurrenderInternal");
-            return "Surrendered encounter.";
+            Type t = FindType("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter");
+            PropertyInfo p = t == null ? null : t.GetProperty("PlayerSurrender",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            if (p == null) throw new MissingMemberException("PlayerEncounter.PlayerSurrender");
+            p.SetValue(null, true, null);
+            InvokeStaticNoArg("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter", "Update");
+            return "Surrendered encounter through PlayerEncounter.PlayerSurrender + Update.";
         }
 
         private static string DoRetreat()
         {
             object enc = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter", "Current");
             if (enc == null) throw new InvalidOperationException("No active player encounter.");
-            object sim = GetProp(enc, "CurrentBattleSimulation");
+            object sim = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter",
+                "CurrentBattleSimulation");
             if (sim != null)
             {
+                object active = GetActiveGameState();
+                if (active != null && active.GetType().Name == "MapState")
+                    InvokeNoArg(active, "EndBattleSimulation");
                 InvokeNoArg(sim, "OnPlayerRetreat");
-                return "Retreated from simulated battle.";
+                return "Retreated from simulated battle through vanilla simulation lifecycle.";
             }
-            InvokeNoArg(enc, "LeaveBattle");
+            InvokeStaticNoArg("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter", "LeaveBattle");
             return "Left battle.";
         }
 
@@ -1019,90 +1173,187 @@ namespace BannerlordStrategicBridge
             return null;
         }
 
-        private static string DoListSaves()
+        private static object GetActiveGameState()
+        {
+            object game = GetStatic("TaleWorlds.Core.Game", "Current");
+            object manager = GetProp(game, "GameStateManager");
+            return GetProp(manager, "ActiveState");
+        }
+
+        private static bool IsPostBattleDecisionPending()
+        {
+            object enc = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter", "Current");
+            if (enc == null) return false;
+            string state = Convert.ToString(GetProp(enc, "EncounterState"),
+                CultureInfo.InvariantCulture) ?? "";
+            return state.Length > 0 && state != "Begin" && state != "Wait";
+        }
+
+        private static string MetaValue(object meta, string key)
+        {
+            if (meta == null) return "";
+            try
+            {
+                PropertyInfo p = meta.GetType().GetProperty("Item",
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                    null, typeof(string), new Type[] { typeof(string) }, null);
+                if (p == null) return "";
+                object value = p.GetValue(meta, new object[] { key });
+                return Convert.ToString(value, CultureInfo.InvariantCulture) ?? "";
+            }
+            catch { return ""; }
+        }
+
+        private static object[] GetSaveFiles()
         {
             Type t = FindType("TaleWorlds.Core.MBSaveLoad");
             if (t == null) throw new TypeLoadException("TaleWorlds.Core.MBSaveLoad");
-            MethodInfo m = t.GetMethod("GetSaveFileNames",
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
-                null, Type.EmptyTypes, null);
-            if (m == null) throw new MissingMethodException("MBSaveLoad.GetSaveFileNames");
-            string[] names = m.Invoke(null, null) as string[];
-            return names == null ? "" : string.Join(",", names);
+            MethodInfo[] ms = t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic |
+                BindingFlags.Static);
+            for (int i = 0; i < ms.Length; i++)
+            {
+                if (ms[i].Name != "GetSaveFiles") continue;
+                ParameterInfo[] ps = ms[i].GetParameters();
+                object result = null;
+                if (ps.Length == 0)
+                    result = ms[i].Invoke(null, null);
+                else if (ps.Length == 1)
+                    result = ms[i].Invoke(null, new object[] { null });
+                else
+                    continue;
+                IEnumerable e = AsEnumerable(result);
+                if (e == null) return new object[0];
+                List<object> values = new List<object>();
+                foreach (object x in e) values.Add(x);
+                return values.ToArray();
+            }
+            throw new MissingMethodException("MBSaveLoad.GetSaveFiles");
+        }
+
+        private static string DoListSaves()
+        {
+            object[] files = GetSaveFiles();
+            StringBuilder b = new StringBuilder();
+            b.Append("[");
+            for (int i = 0; i < files.Length; i++)
+            {
+                if (i > 0) b.Append(",");
+                object info = files[i];
+                object meta = GetProp(info, "MetaData");
+                b.Append("{\"name\":").Append(J(Convert.ToString(GetProp(info, "Name"),
+                        CultureInfo.InvariantCulture)))
+                    .Append(",\"corrupted\":").Append(BoolValue(GetProp(info, "IsCorrupted")) ? "true" : "false")
+                    .Append(",\"creation_time\":").Append(J(MetaValue(meta, "CreationTime")))
+                    .Append(",\"character_name\":").Append(J(MetaValue(meta, "CharacterName")))
+                    .Append(",\"game_version\":").Append(J(MetaValue(meta, "NewGameVersion")))
+                    .Append(",\"unique_game_id\":").Append(J(MetaValue(meta, "UniqueGameId")))
+                    .Append("}");
+            }
+            b.Append("]");
+            return b.ToString();
+        }
+
+        private static string NormalizeSaveName(string saveName)
+        {
+            string name = (saveName ?? "").Trim();
+            if (name.EndsWith(".sav", StringComparison.OrdinalIgnoreCase))
+                name = name.Substring(0, name.Length - 4);
+            return name;
+        }
+
+        private static object FindSandboxViewSubModule()
+        {
+            Type t = FindType("SandBox.View.SandBoxViewSubModule");
+            if (t != null)
+            {
+                FieldInfo f = t.GetField("_instance",
+                    BindingFlags.NonPublic | BindingFlags.Static);
+                if (f != null)
+                {
+                    object value = f.GetValue(null);
+                    if (value != null) return value;
+                }
+            }
+            return FindLoadedSubModule("SandBox.View.SandBoxViewSubModule");
         }
 
         private static string DoLoadSave(string saveName)
         {
-            if (string.IsNullOrWhiteSpace(saveName))
+            if (GetStatic("TaleWorlds.CampaignSystem.Campaign", "Current") != null)
+                throw new InvalidOperationException("LOAD_REQUIRES_MAIN_MENU");
+            string name = NormalizeSaveName(saveName);
+            if (name.Length == 0)
                 throw new ArgumentException("load_save requires a save name.");
 
-            object instance = FindLoadedSubModule("SandBox.View.SandBoxViewSubModule");
+            object instance = FindSandboxViewSubModule();
             if (instance == null)
                 throw new InvalidOperationException("Loaded SandBoxViewSubModule instance not found.");
-
-            Type t = instance.GetType();
-            MethodInfo m = t.GetMethod("ContinueCampaign",
+            MethodInfo m = instance.GetType().GetMethod("ContinueCampaign",
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
                 null, new Type[] { typeof(string) }, null);
             if (m == null)
-                throw new MissingMethodException(t.FullName, "ContinueCampaign");
-
-            string name = saveName;
-            if (name.EndsWith(".sav", StringComparison.OrdinalIgnoreCase))
-                name = name.Substring(0, name.Length - 4);
-
+                throw new MissingMethodException(instance.GetType().FullName, "ContinueCampaign");
             m.Invoke(instance, new object[] { name });
-            return "ContinueCampaign invoked on loaded SandBox view for " + name + ".";
+            return name;
         }
 
-        private static string DoAutoResolve()
+        private static string LatestSaveName()
+        {
+            object[] files = GetSaveFiles();
+            if (files.Length == 0)
+                throw new InvalidOperationException("NO_SAVE_FILES");
+            return Convert.ToString(GetProp(files[0], "Name"), CultureInfo.InvariantCulture) ?? "";
+        }
+
+        private static void StartSaveRequest(string mode, string arg)
+        {
+            object campaign = GetStatic("TaleWorlds.CampaignSystem.Campaign", "Current");
+            object handler = GetProp(campaign, "SaveHandler");
+            if (handler == null)
+                throw new InvalidOperationException("NOT_IN_CAMPAIGN");
+            if (BoolValue(GetProp(handler, "IsSaving")))
+                throw new InvalidOperationException("SAVE_IN_PROGRESS");
+
+            if (mode == "save_as")
+            {
+                string name = NormalizeSaveName(arg);
+                if (name.Length == 0)
+                    throw new ArgumentException("save_as requires a save name.");
+                InvokeOneString(handler, "SaveAs", name);
+            }
+            else
+            {
+                InvokeNoArg(handler, "QuickSaveCurrentGame");
+            }
+        }
+
+        private static string DoGracefulExit()
+        {
+            object module = GetStatic("TaleWorlds.MountAndBlade.Module", "CurrentModule");
+            if (module == null)
+                throw new InvalidOperationException("RUNTIME_NOT_READY");
+            MethodInfo m = module.GetType().GetMethod("ShutDownWithDelay",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+                null, new Type[] { typeof(string), typeof(int) }, null);
+            if (m == null)
+                throw new MissingMethodException(module.GetType().FullName, "ShutDownWithDelay");
+            m.Invoke(module, new object[] { "Bannerlord Strategic Bridge requested graceful exit", 1 });
+            return "Graceful shutdown requested.";
+        }
+
+        private static string StartAutoResolve()
         {
             object enc = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter", "Current");
             object battle = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter", "Battle");
             if (enc == null || battle == null)
-                throw new InvalidOperationException("No battle-ready player encounter.");
-
+                throw new InvalidOperationException("NO_ACTIVE_ENCOUNTER");
             object campaign = GetStatic("TaleWorlds.CampaignSystem.Campaign", "Current");
-            object menuContext = GetProp(campaign, "CurrentMenuContext");
-            Type argsType = FindType("TaleWorlds.CampaignSystem.GameMenus.MenuCallbackArgs");
-            Type textType = FindType("TaleWorlds.Localization.TextObject");
-            if (argsType == null || textType == null)
-                throw new TypeLoadException("MenuCallbackArgs/TextObject");
-            if (menuContext == null)
-                throw new InvalidOperationException("Encounter menu context is not available.");
-
-            object textObject = Activator.CreateInstance(textType);
-            object callbackArgs = null;
-            ConstructorInfo[] constructors = argsType.GetConstructors(
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            for (int i = 0; i < constructors.Length; i++)
-            {
-                ParameterInfo[] ps = constructors[i].GetParameters();
-                if (ps.Length == 2 &&
-                    ps[0].ParameterType.FullName == "TaleWorlds.CampaignSystem.GameState.MenuContext" &&
-                    ps[0].ParameterType.IsInstanceOfType(menuContext))
-                {
-                    callbackArgs = constructors[i].Invoke(new object[] { menuContext, textObject });
-                    break;
-                }
-            }
-            if (callbackArgs == null)
-                throw new MissingMethodException("MenuCallbackArgs(MenuContext, TextObject)");
-
+            object callbackArgs = BuildMenuCallbackArgs(campaign);
             InvokeStaticOneArg("Helpers.MenuHelper",
                 "EncounterOrderAttackConsequence", callbackArgs);
-
-            object sim = GetProp(enc, "CurrentBattleSimulation");
-            if (sim != null)
-            {
-                MethodInfo skip = sim.GetType().GetMethod("Skip",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-                    null, Type.EmptyTypes, null);
-                if (skip != null)
-                    skip.Invoke(sim, null);
-            }
-            return "Bannerlord Send Troops auto-resolve executed.";
+            return "Send Troops simulation started.";
         }
+
         private static string InspectType(string typeName)
         {
             Type t = FindType(typeName);
@@ -1120,23 +1371,200 @@ namespace BannerlordStrategicBridge
             for (int i = 0; i < methods.Length; i++)
                 b.AppendLine(methods[i].ToString());
             string path = Root + @"\inspect.txt";
-            File.WriteAllText(path, b.ToString(), Encoding.UTF8);
+            AtomicWriteAllText(path, b.ToString());
             return "Type dump written to " + path;
         }
 
-        private void WriteResponse(string id, bool ok, string message)
+        private void WriteResponse(string id, bool ok, string status,
+            string message, string errorCode)
         {
             string json = "{\"id\":" + J(id) +
                 ",\"ok\":" + (ok ? "true" : "false") +
+                ",\"status\":" + J(status) +
                 ",\"message\":" + J(message) +
+                ",\"error_code\":" + J(errorCode ?? "") +
+                ",\"session_id\":" + J(_sessionId) +
                 ",\"updated_utc\":" + J(DateTime.UtcNow.ToString("o")) + "}";
-            File.WriteAllText(ResponsePath, json, Encoding.UTF8);
+            AtomicWriteAllText(ResponsePath, json);
+            AtomicWriteAllText(ResponseArchivePath(id), json);
         }
+
+        private void BeginPending(string id, string verb, string arg, string raw, string phase)
+        {
+            _pendingCommandId = id;
+            _pendingVerb = verb;
+            _pendingArg = arg;
+            _pendingRaw = raw;
+            _pendingPhase = phase;
+            _pendingStartedUtc = DateTime.UtcNow;
+            _pendingSawBusy = false;
+            _pendingSkipIssued = false;
+            _pendingSimulationReleased = false;
+            WriteResponse(id, true, "running", phase, "");
+        }
+
+        private void FinishPending(bool ok, string message, string errorCode)
+        {
+            string id = _pendingCommandId;
+            string raw = _pendingRaw;
+            string verb = _pendingVerb;
+            WriteResponse(id, ok, ok ? "completed" : "error", message, errorCode);
+            WriteJournal(id, ok ? "done" : "failed", raw);
+            Log((ok ? "OK " : "FAIL ") + verb + " -> " + message);
+            _lastCommandId = id;
+            _pendingCommandId = "";
+            _pendingVerb = "";
+            _pendingArg = "";
+            _pendingRaw = "";
+            _pendingPhase = "";
+            _pendingStartedUtc = DateTime.MinValue;
+            _pendingSawBusy = false;
+            _pendingSkipIssued = false;
+            _pendingSimulationReleased = false;
+        }
+
+        private void AdvancePendingOperation()
+        {
+            if (_pendingCommandId.Length == 0)
+                return;
+            if ((DateTime.UtcNow - _pendingStartedUtc).TotalSeconds > 90.0)
+            {
+                FinishPending(false, "Pending operation timed out.", "RUNTIME_TIMEOUT");
+                return;
+            }
+
+            if (_pendingVerb == "save" || _pendingVerb == "quicksave" ||
+                _pendingVerb == "save_as")
+            {
+                object campaign = GetStatic("TaleWorlds.CampaignSystem.Campaign", "Current");
+                object handler = GetProp(campaign, "SaveHandler");
+                if (handler == null)
+                {
+                    FinishPending(false, "Campaign disappeared while saving.", "NOT_IN_CAMPAIGN");
+                    return;
+                }
+                bool busy = BoolValue(GetProp(handler, "IsSaving"));
+                if (busy)
+                {
+                    _pendingSawBusy = true;
+                    _pendingPhase = "saving";
+                    return;
+                }
+                if (_pendingSawBusy)
+                {
+                    string slot = Convert.ToString(GetStatic("TaleWorlds.Core.MBSaveLoad",
+                        "ActiveSaveSlotName"), CultureInfo.InvariantCulture) ?? "";
+                    if (_pendingVerb == "save_as" &&
+                        !string.Equals(slot, NormalizeSaveName(_pendingArg),
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        FinishPending(false, "Save completed but active slot did not match request.",
+                            "SAVE_VERIFY_FAILED");
+                        return;
+                    }
+                    FinishPending(true, "Save completed. active_slot=" + slot, "");
+                }
+                return;
+            }
+
+            if (_pendingVerb == "load_save" || _pendingVerb == "continue_latest")
+            {
+                object campaign = GetStatic("TaleWorlds.CampaignSystem.Campaign", "Current");
+                string slot = Convert.ToString(GetStatic("TaleWorlds.Core.MBSaveLoad",
+                    "ActiveSaveSlotName"), CultureInfo.InvariantCulture) ?? "";
+                object active = GetActiveGameState();
+                if (campaign != null &&
+                    string.Equals(slot, NormalizeSaveName(_pendingArg),
+                        StringComparison.OrdinalIgnoreCase) &&
+                    active != null && active.GetType().Name == "MapState")
+                {
+                    FinishPending(true, "Loaded save " + slot + ".", "");
+                }
+                else
+                {
+                    _pendingPhase = "loading";
+                }
+                return;
+            }
+
+            if (_pendingVerb == "autoresolve" || _pendingVerb == "send_troops")
+            {
+                object sim = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter",
+                    "CurrentBattleSimulation");
+                if (!_pendingSimulationReleased)
+                {
+                    if (sim == null)
+                    {
+                        _pendingPhase = "simulation_starting";
+                        return;
+                    }
+                    if (!_pendingSkipIssued)
+                    {
+                        InvokeNoArg(sim, "Skip");
+                        _pendingSkipIssued = true;
+                        _pendingPhase = "simulation_running";
+                        return;
+                    }
+                    if (!BoolValue(GetProp(sim, "IsSimulationFinished")))
+                    {
+                        _pendingPhase = "simulation_running";
+                        return;
+                    }
+
+                    object active = GetActiveGameState();
+                    if (active != null && active.GetType().Name == "MapState")
+                        InvokeNoArg(active, "EndBattleSimulation");
+                    InvokeNoArg(sim, "OnFinished");
+                    _pendingSimulationReleased = true;
+                    _pendingPhase = "results_pending";
+                    return;
+                }
+
+                object enc = GetStatic("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter",
+                    "Current");
+                if (enc == null)
+                {
+                    FinishPending(true, "Send Troops completed and encounter finalized.", "");
+                    return;
+                }
+
+                string encounterState = Convert.ToString(GetProp(enc, "EncounterState"),
+                    CultureInfo.InvariantCulture) ?? "";
+                if (encounterState == "Wait" || encounterState == "PrepareResults" ||
+                    encounterState == "ApplyResults")
+                {
+                    InvokeStaticNoArg("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter",
+                        "Update");
+                    _pendingPhase = "results_pending";
+                    return;
+                }
+
+                _pendingPhase = "post_battle:" + encounterState;
+                FinishPending(true,
+                    "Send Troops simulation and core result transition completed; post-battle state=" +
+                    encounterState + ".", "");
+                return;
+            }
+        }
+
+        private void ReplayArchivedResponse(string id)
+        {
+            string archive = ResponseArchivePath(id);
+            string json = TryReadShared(archive);
+            if (!string.IsNullOrWhiteSpace(json))
+                AtomicWriteAllText(ResponsePath, json);
+            else
+                WriteResponse(id, false, "error",
+                    "Prior command finalized but archived response is unavailable.",
+                    "RECOVERY_UNCERTAIN");
+        }
+
         private void ProcessCommand()
         {
-            if (!File.Exists(CommandPath))
+            string raw = TryReadShared(CommandPath);
+            if (raw == null)
                 return;
-            string raw = File.ReadAllText(CommandPath, Encoding.UTF8).Trim();
+            raw = raw.Trim();
             if (raw.Length == 0)
                 return;
             string[] parts = raw.Split(new char[] { '|' }, 3);
@@ -1145,12 +1573,59 @@ namespace BannerlordStrategicBridge
             string id = parts[0].Trim();
             if (id.Length == 0 || id == _lastCommandId)
                 return;
-            _lastCommandId = id;
             string verb = parts[1].Trim().ToLowerInvariant();
             string arg = parts.Length > 2 ? parts[2].Trim() : "";
+
+            if (_pendingCommandId == id)
+                return;
+
+            string[] journal = ReadJournal(id);
+            if (journal != null && journal.Length >= 3 && journal[0] == id)
+            {
+                if (journal[2] != PayloadKey(raw))
+                {
+                    WriteResponse(id, false, "error",
+                        "Command id was reused with different payload.",
+                        "COMMAND_ID_CONFLICT");
+                    _lastCommandId = id;
+                    return;
+                }
+                if (journal[1] == "done" || journal[1] == "failed")
+                {
+                    ReplayArchivedResponse(id);
+                    _lastCommandId = id;
+                    return;
+                }
+                if (journal[1] == "started" && _pendingCommandId != id)
+                {
+                    WriteResponse(id, false, "error",
+                        "Command was interrupted before a final result; refusing automatic replay.",
+                        "RECOVERY_UNCERTAIN");
+                    WriteJournal(id, "failed", raw);
+                    _lastCommandId = id;
+                    return;
+                }
+            }
+
+            if (_pendingCommandId.Length > 0 && _pendingCommandId != id)
+            {
+                WriteResponse(id, false, "error",
+                    "Runtime is busy with " + _pendingVerb + " (" + _pendingPhase + ").",
+                    "RUNTIME_BUSY");
+                _lastCommandId = id;
+                return;
+            }
+
+            WriteJournal(id, "started", raw);
             try
             {
-                string message;
+                string message = "";
+                bool asynchronous = false;
+                bool readOnly = verb == "status" || verb == "list_saves" ||
+                    verb == "saves" || verb == "inspect";
+                if (!readOnly && IsPostBattleDecisionPending())
+                    throw new InvalidOperationException("POST_BATTLE_DECISION_PENDING");
+
                 if (verb == "status")
                     message = "State refreshed.";
                 else if (verb == "hold")
@@ -1171,32 +1646,84 @@ namespace BannerlordStrategicBridge
                 else if (verb == "time")
                 {
                     int speed;
-                    if (!int.TryParse(arg, NumberStyles.Integer, CultureInfo.InvariantCulture, out speed))
+                    if (!int.TryParse(arg, NumberStyles.Integer,
+                        CultureInfo.InvariantCulture, out speed))
                         throw new ArgumentException("time requires an integer speed.");
                     message = DoTimeSpeed(speed);
                 }
                 else if (verb == "list_saves" || verb == "saves")
                     message = DoListSaves();
+                else if (verb == "save" || verb == "quicksave" || verb == "save_as")
+                {
+                    StartSaveRequest(verb == "save_as" ? "save_as" : "quicksave", arg);
+                    BeginPending(id, verb, arg, raw, "save_queued");
+                    asynchronous = true;
+                }
                 else if (verb == "load_save")
-                    message = DoLoadSave(arg);
+                {
+                    string name = DoLoadSave(arg);
+                    BeginPending(id, verb, name, raw, "load_requested");
+                    asynchronous = true;
+                }
+                else if (verb == "continue_latest")
+                {
+                    string name = LatestSaveName();
+                    name = DoLoadSave(name);
+                    BeginPending(id, verb, name, raw, "load_requested");
+                    asynchronous = true;
+                }
                 else if (verb == "autoresolve" || verb == "send_troops")
-                    message = DoAutoResolve();
+                {
+                    StartAutoResolve();
+                    BeginPending(id, verb, arg, raw, "simulation_starting");
+                    asynchronous = true;
+                }
+                else if (verb == "attack")
+                    throw new InvalidOperationException("REALTIME_COMBAT_DISABLED");
+                else if (verb == "surrender")
+                    message = DoSurrender();
+                else if (verb == "retreat")
+                    message = DoRetreat();
+                else if (verb == "exit" || verb == "quit")
+                    message = DoGracefulExit();
                 else if (verb == "inspect")
                     message = InspectType(arg);
                 else
                     throw new InvalidOperationException("Unknown command: " + verb);
 
-                WriteResponse(id, true, message);
-                Log("OK " + raw + " -> " + message);
+                if (!asynchronous)
+                {
+                    WriteResponse(id, true, "completed", message, "");
+                    WriteJournal(id, "done", raw);
+                    _lastCommandId = id;
+                    Log("OK " + raw + " -> " + message);
+                }
             }
             catch (Exception ex)
             {
                 string msg = ex.GetType().Name + ": " + ex.Message;
                 if (ex.InnerException != null)
-                    msg += " | " + ex.InnerException.GetType().Name + ": " + ex.InnerException.Message;
-                WriteResponse(id, false, msg);
+                    msg += " | " + ex.InnerException.GetType().Name + ": " +
+                        ex.InnerException.Message;
+                string code = "COMMAND_FAILED";
+                if (ex.Message == "REALTIME_COMBAT_DISABLED")
+                    code = "REALTIME_COMBAT_DISABLED";
+                else if (ex.Message == "LOAD_REQUIRES_MAIN_MENU")
+                    code = "LOAD_REQUIRES_MAIN_MENU";
+                else if (ex.Message == "NO_ACTIVE_ENCOUNTER")
+                    code = "NO_ACTIVE_ENCOUNTER";
+                else if (ex.Message == "SAVE_IN_PROGRESS")
+                    code = "SAVE_IN_PROGRESS";
+                else if (ex.Message == "NOT_IN_CAMPAIGN")
+                    code = "NOT_IN_CAMPAIGN";
+                else if (ex.Message == "POST_BATTLE_DECISION_PENDING")
+                    code = "POST_BATTLE_DECISION_PENDING";
+                WriteResponse(id, false, "error", msg, code);
+                WriteJournal(id, "failed", raw);
+                _lastCommandId = id;
                 Log("FAIL " + raw + " -> " + ex);
             }
         }
+
     }
 }
