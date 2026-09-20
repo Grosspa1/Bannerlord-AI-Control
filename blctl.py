@@ -47,11 +47,15 @@ def main():
     cid = str(int(time.time() * 1000)) + "-" + uuid.uuid4().hex[:8]
     atomic_command_write(cid + "|" + verb + "|" + arg, cid)
 
-    deadline = time.time() + 15.0
+    deadline = time.time() + 120.0
     while time.time() < deadline:
         try:
             response = read_json(RESP)
             if response.get("id") == cid:
+                status = response.get("status", "completed")
+                if status in {"running", "accepted", "waiting"}:
+                    time.sleep(0.15)
+                    continue
                 print(json.dumps(response, indent=2))
                 if os.path.exists(STATE):
                     try:
@@ -63,7 +67,7 @@ def main():
             pass
         time.sleep(0.15)
 
-    print("Timed out waiting for Bannerlord bridge.", file=sys.stderr)
+    print("Timed out waiting for final Bannerlord bridge response.", file=sys.stderr)
     return 3
 
 

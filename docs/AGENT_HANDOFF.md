@@ -30,6 +30,7 @@ Target: **Mount & Blade II: Bannerlord v1.4.8.119303**
 - `list_saves` works
 - `load_save` remains under investigation
 - Current bridge polling is on Bannerlord's main thread at roughly 350 ms
+- Runtime specialist findings and test plan: \`AGENT_RUNTIME.md\`
 
 ## Safety
 
