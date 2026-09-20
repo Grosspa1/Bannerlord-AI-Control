@@ -38,6 +38,19 @@ namespace BannerlordStrategicBridge
             Directory.CreateDirectory(ResponseArchiveRoot);
             Directory.CreateDirectory(JournalRoot);
             _sessionId = Guid.NewGuid().ToString("N");
+
+            string startupCommand = TryReadShared(CommandPath);
+            if (!string.IsNullOrWhiteSpace(startupCommand))
+            {
+                string[] startupParts = startupCommand.Trim().Split(new char[] { '|' }, 3);
+                if (startupParts.Length >= 1)
+                {
+                    _lastCommandId = startupParts[0].Trim();
+                    if (_lastCommandId.Length > 0)
+                        Log("Ignoring preexisting command at startup id=" + _lastCommandId);
+                }
+            }
+
             Log("Bannerlord Strategic Bridge loaded. session=" + _sessionId);
         }
 
