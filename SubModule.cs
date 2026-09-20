@@ -92,10 +92,24 @@ namespace BannerlordStrategicBridge
                     fs.Write(bytes, 0, bytes.Length);
                     fs.Flush(true);
                 }
-                if (File.Exists(path))
-                    File.Replace(tmp, path, null);
-                else
-                    File.Move(tmp, path);
+
+                for (int attempt = 0; attempt < 6; attempt++)
+                {
+                    try
+                    {
+                        if (File.Exists(path))
+                            File.Replace(tmp, path, null);
+                        else
+                            File.Move(tmp, path);
+                        return;
+                    }
+                    catch (IOException)
+                    {
+                        if (attempt == 5)
+                            throw;
+                        System.Threading.Thread.Sleep(20 * (attempt + 1));
+                    }
+                }
             }
             finally
             {
