@@ -10,5 +10,6 @@
 !docs/
 !docs/AGENT_HANDOFF.md
 !docs/AGENT_STATE.md
+!docs/AGENT_WORLD.md
 !module/
 !module/SubModule.xml

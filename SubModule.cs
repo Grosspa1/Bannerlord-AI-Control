@@ -1635,6 +1635,10 @@ namespace BannerlordStrategicBridge
                 }
                 else if (verb == "travel")
                     message = DoTravel(arg);
+                else if (verb == "enter_settlement")
+                    message = DoEnterSettlement(arg);
+                else if (verb == "leave_settlement")
+                    message = DoLeaveSettlement();
                 else if (verb == "engage")
                     message = DoEngage(arg);
                 else if (verb == "pause")
