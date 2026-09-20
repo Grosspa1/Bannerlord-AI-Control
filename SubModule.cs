@@ -43,7 +43,7 @@ namespace BannerlordStrategicBridge
 
             try
             {
-                File.WriteAllText(StatePath, BuildState(), Encoding.UTF8);
+                File.WriteAllText(StatePath, BuildStrategicStateV3(), Encoding.UTF8);
             }
             catch (Exception ex)
             {
