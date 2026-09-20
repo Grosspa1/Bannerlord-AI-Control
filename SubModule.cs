@@ -19,6 +19,8 @@ namespace BannerlordStrategicBridge
         private const string JournalRoot = Root + @"\journal";
         private const string ResponseArchiveRoot = Root + @"\responses";
         private DateTime _lastPoll = DateTime.MinValue;
+        private DateTime _sessionStartedUtc = DateTime.MinValue;
+        private bool _startupCommandFenceDone;
         private string _lastCommandId = "";
         private static string _sessionId = "";
         private static string _pendingCommandId = "";
@@ -37,20 +39,8 @@ namespace BannerlordStrategicBridge
             Directory.CreateDirectory(Root);
             Directory.CreateDirectory(ResponseArchiveRoot);
             Directory.CreateDirectory(JournalRoot);
+            _sessionStartedUtc = DateTime.UtcNow;
             _sessionId = Guid.NewGuid().ToString("N");
-
-            string startupCommand = TryReadShared(CommandPath);
-            if (!string.IsNullOrWhiteSpace(startupCommand))
-            {
-                string[] startupParts = startupCommand.Trim().Split(new char[] { '|' }, 3);
-                if (startupParts.Length >= 1)
-                {
-                    _lastCommandId = startupParts[0].Trim();
-                    if (_lastCommandId.Length > 0)
-                        Log("Ignoring preexisting command at startup id=" + _lastCommandId);
-                }
-            }
-
             Log("Bannerlord Strategic Bridge loaded. session=" + _sessionId);
         }
 
@@ -1574,6 +1564,38 @@ namespace BannerlordStrategicBridge
 
         private void ProcessCommand()
         {
+            if (!_startupCommandFenceDone)
+            {
+                try
+                {
+                    if (File.Exists(CommandPath) &&
+                        File.GetLastWriteTimeUtc(CommandPath) <= _sessionStartedUtc)
+                    {
+                        string startupRaw = TryReadShared(CommandPath);
+                        if (startupRaw == null)
+                            return;
+                        startupRaw = startupRaw.Trim();
+                        if (startupRaw.Length > 0)
+                        {
+                            string[] startupParts = startupRaw.Split(new char[] { '|' }, 3);
+                            if (startupParts.Length >= 1)
+                            {
+                                _lastCommandId = startupParts[0].Trim();
+                                if (_lastCommandId.Length > 0)
+                                    Log("Ignoring preexisting command at startup id=" + _lastCommandId);
+                            }
+                        }
+                        _startupCommandFenceDone = true;
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log("Startup command fence warning: " + ex.GetType().Name + ": " + ex.Message);
+                }
+                _startupCommandFenceDone = true;
+            }
+
             string raw = TryReadShared(CommandPath);
             if (raw == null)
                 return;
