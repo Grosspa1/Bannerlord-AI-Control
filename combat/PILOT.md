@@ -8,9 +8,32 @@ assistant responses. It uses only the Python standard library and the existing
 
 GPT-5.5 can act as that assistant when it runs in an agent connected to your gaming
 PC with permission to read the bridge files and launch the Python clients. Give
-that agent this repository and these instructions. A chat without those local
-tools cannot operate the game merely by receiving the mod ZIP. The mod itself
+that agent the installed module folder and these instructions. A chat without
+those local tools cannot operate the game merely by receiving the mod ZIP. The mod itself
 does not create that connection or choose a model.
+
+Opening the launcher, configuring a Custom Battle, and focusing the game are UI
+setup tasks: you can do them yourself, or an assistant can use an available desktop
+connector. Once the battle is ready and focused, the bridge uses local files and
+Python commands; the assistant needs file access and command execution to run the
+pilot. If desktop control is unavailable, the user can complete UI setup manually.
+If local file or command tools are disabled or unavailable, the assistant cannot
+run the pilot. Report the missing capability without bypassing the restriction.
+When using Local Commander, `Agent control is disabled by the local operator`
+means control must be enabled through its normal local operator control before
+that agent can continue. Enable it only when the user explicitly requests it;
+do not switch tools to get around an operator stop.
+
+On this PC, Local Commander protects the live game directory from command
+execution. Use its `run_process` tool with `executable: "python.exe"`,
+`cwd: "C:\\Users\\Public\\BannerlordControllerBuild-combat"`, and
+`args: ["combat\\combatctl.py", "status"]`. For a ready battle, use
+`args: ["combat\\combatpilot.py", "engage", "nearest", "--seconds", "5"]`.
+The bare executable name selects Local Commander's configured Python allowlist
+entry. Do not widen that allowlist or the live-install permissions. These clients
+use the same bridge directory as the installed copies. `run_process` preserves
+sibling imports; Local Commander's isolated `run_python` runner is not the
+documented entry point for this multi-file client.
 
 This is an experimental controller, not a complete game-playing agent. Offline
 tests cover its decisions and stop conditions. The repository's live test report
@@ -25,12 +48,20 @@ performance or projectile defense.
 Enable the Combat Bridge, enter a disposable single-player Custom Battle, finish
 deployment, dismount, and equip a melee weapon. Close menus and keep the game
 focused. Launch these commands through a local assistant or a background terminal
-that does not take focus away from the game:
+that does not take focus away from the game. From the installed module directory
+on this PC:
 
 ```powershell
+Set-Location -LiteralPath 'C:\Program Files (x86)\Steam\steamapps\common\Mount & Blade II Bannerlord\Modules\BannerlordCombatBridge'
 python combatctl.py status
 python combatpilot.py engage nearest --seconds 5
 ```
+
+`Combat state is stale` is expected when the game is closed and can occur while
+it is loading. Start the game with the module enabled, finish loading the battle,
+then read `status` again. A fresh state at the main menu can still report no
+active mission. Start the pilot only after a fresh state reports an eligible,
+focused battle. Stale state is a stop condition, not a successful connection.
 
 Start the goal when a suitable opponent is within 20 scene units, as shown by
 the current positions in `status`. The pilot stops without input if none is
@@ -141,9 +172,15 @@ the pilot's stop reason accurately.
 
 ## Offline verification
 
-From the repository root:
+Tests are optional developer checks and are **not needed to play**. The installed
+ZIP includes the clients and guides, but not the source repository's `combat/tests`
+directory. Running test discovery from the installed module folder will fail.
+
+On this PC the source checkout is
+`C:\Users\Public\BannerlordControllerBuild-combat`. To run the pilot tests there:
 
 ```powershell
+Set-Location -LiteralPath 'C:\Users\Public\BannerlordControllerBuild-combat'
 python -m unittest discover -s combat/tests -p test_pilot.py -v
 ```
 

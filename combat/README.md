@@ -25,9 +25,21 @@ an experimental prototype; see the repository's
    command producer at a time. Launch the client without taking focus away from
    the game, or start it externally through the assistant.
 
-From the directory containing the client:
+You can perform launcher/battle setup yourself. An assistant needs an available
+desktop connector to do that UI setup and focus the game; it needs local file
+access and command execution to operate the bridge and pilot once the battle is
+ready. An unavailable or disabled connector must be reported, not bypassed.
+If Local Commander reports that the local operator disabled agent control, the
+normal local operator enable control must be used at the user's explicit request
+before agent control resumes. For Local Commander, run the clients from the
+approved source checkout rather than using the protected live installation as
+the working directory; see the exact tool arguments in [PILOT.md](PILOT.md).
+
+For a local terminal, from the installed module directory (adjust for a different
+install; Local Commander users should use the source-checkout instructions above):
 
 ```powershell
+Set-Location -LiteralPath 'C:\Program Files (x86)\Steam\steamapps\common\Mount & Blade II Bannerlord\Modules\BannerlordCombatBridge'
 python combatctl.py status
 python combatctl.py input --forward 1 --seconds 0.5
 python combatctl.py input --strafe -1 --seconds 0.5
@@ -36,6 +48,11 @@ python combatctl.py input --attack right --seconds 0.3
 python combatctl.py input --jump --seconds 0.1
 python combatctl.py release
 ```
+
+If `status` reports stale state while the game is closed or loading, start the
+game with the module enabled and finish loading a battle before checking again.
+A fresh main-menu state can report no active mission. Run actions only after
+fresh state reports an eligible battle; the stale-state guard remains required.
 
 `--yaw` and `--pitch` are absolute world angles in radians. Omit them to retain
 the character's current aim. Yaw zero faces +Y, positive yaw turns toward -X;
@@ -81,9 +98,13 @@ outcome, not permission to repeat the same action automatically.
 
 ## Development
 
-From the repository root:
+Development tests are optional and are **not required to play**. The installed
+ZIP does not include `combat/tests`, `build.ps1`, or the source tree. Run the
+following only from the source checkout, which is located on this PC at
+`C:\Users\Public\BannerlordControllerBuild-combat`:
 
 ```powershell
+Set-Location -LiteralPath 'C:\Users\Public\BannerlordControllerBuild-combat'
 .\combat\build.ps1
 .\combat\tests\Test-Combat.ps1
 ```
