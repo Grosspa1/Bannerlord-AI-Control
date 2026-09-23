@@ -13,3 +13,15 @@
 !docs/AGENT_WORLD.md
 !module/
 !module/SubModule.xml
+!combat/
+!combat/*.cs
+!combat/*.ps1
+!combat/*.py
+!combat/*.md
+!combat/module/
+!combat/module/SubModule.xml
+!combat/tests/
+!combat/tests/*.cs
+!combat/tests/*.py
+!combat/tests/*.ps1
+!docs/REALTIME_COMBAT.md

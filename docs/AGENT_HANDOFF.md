@@ -32,6 +32,22 @@ Target: **Mount & Blade II: Bannerlord v1.4.8.119303**
 - Current bridge polling is on Bannerlord's main thread at roughly 350 ms
 - Runtime specialist findings and test plan: \`AGENT_RUNTIME.md\`
 
+## Real-time combat continuation (2026-09-23)
+
+The user explicitly requested real-time combat controls for both their character
+and troops. This expands scope through an independent `BannerlordCombatBridge`
+module under `combat/`, without changing the strategic bridge's Send Troops path.
+Worktree: `C:\Users\Public\BannerlordControllerBuild-combat`, branch
+`feature/realtime-combat-control`, based on main `48b0d1f`. Party/Economy work,
+including its uncommitted live-test fixes, remains in its separate worktree.
+
+The prototype builds and passes offline tests. It exposes leased on-foot inputs,
+target-facing, native formation orders and telemetry; it does not provide an
+autonomous fighting policy. [Setup, limitations and acceptance tests](REALTIME_COMBAT.md).
+No combat DLL deployment or live battle commands have been performed. Complete
+the disposable Custom Battle acceptance pass before describing combat as working
+in-game or promoting this module into main.
+
 ## Safety
 
 Do not use surrender, war declarations, kingdom exits, destructive inventory operations, or other irreversible actions merely as API tests. Use read-only tests or disposable saves first.

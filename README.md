@@ -2,7 +2,12 @@
 
 Strategic-control bridge for **Mount & Blade II: Bannerlord v1.4.8.119303**.
 
-The bridge exposes structured campaign telemetry and semantic campaign commands so an AI can make strategic decisions without brittle screen-coordinate automation. Real-time combat automation is intentionally out of scope; battles use Bannerlord's native **Send Troops / battle simulation** path.
+The strategic bridge exposes structured campaign telemetry and semantic campaign commands so an AI can make strategic decisions without brittle screen-coordinate automation. Its battles use Bannerlord's native **Send Troops / battle simulation** path.
+
+A separately enabled [Combat Bridge prototype](combat/README.md) adds real-time
+single-player character inputs and troop orders under the expanded project scope.
+It does not change the strategic bridge's combat behavior. Its in-game acceptance
+tests remain pending; see [implementation and test plan](docs/REALTIME_COMBAT.md).
 
 ## Local development
 
