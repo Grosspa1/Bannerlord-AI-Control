@@ -20,7 +20,7 @@ foreach ($test in @('ProtocolTests', 'InputArgumentsTests', 'FormationArgumentsT
 }
 & (Join-Path $PSScriptRoot 'Test-NativeContract.ps1') -GameRoot $GameRoot -BridgePath $bridge
 if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'test_client.py')) {
-    & python -m unittest discover -s $PSScriptRoot -p test_client.py -v
+    & python -m unittest discover -s $PSScriptRoot -p 'test_*.py' -v
     if ($LASTEXITCODE -ne 0) { throw 'Combat client tests failed.' }
 }
 Write-Output 'PASS: combat offline suites. No game state or live installation was changed.'

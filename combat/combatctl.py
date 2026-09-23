@@ -9,6 +9,8 @@ import time
 import uuid
 
 DEFAULT_ROOT = Path(r"C:\Users\Public\BannerlordCombatBridge")
+PUBLICATION_RETRY_SECONDS = 0.1
+PUBLICATION_MIN_REMAINING_MS = 50
 
 
 class CombatClient:
@@ -53,17 +55,25 @@ class CombatClient:
         session, mission = self.context
         command = dict(session=session, mission=mission, seq=self.sequence,
                        sent_utc_ms=int(time.time() * 1000), ttl_ms=ttl_ms, kind=kind, args=args)
+        publication_started = time.monotonic()
+        payload = json.dumps(command, separators=(",", ":")).encode("utf-8")
         temporary = self.root / ("command." + uuid.uuid4().hex + ".tmp")
         try:
-            with temporary.open("w", encoding="utf-8", newline="") as output:
-                json.dump(command, output, separators=(",", ":"))
+            with temporary.open("xb") as output:
+                output.write(payload)
                 output.flush()
                 os.fsync(output.fileno())
-            # Exactly one publication; never retry an uncertain native action.
-            os.replace(temporary, self.root / "command.json")
+            self._publish(temporary, payload, command, publication_started)
+        except (OSError, RuntimeError, ValueError):
+            self.failed = True
+            raise
         finally:
-            if temporary.exists():
+            try:
                 temporary.unlink()
+            except OSError:
+                # A leftover uniquely named temp file is never a native command.
+                # Do not turn cleanup failure into an action replay or hide its cause.
+                pass
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline:
             try:
@@ -79,6 +89,56 @@ class CombatClient:
             time.sleep(0.01)
         self.failed = True
         raise RuntimeError("No matching acknowledgment. Input will expire; inspect state before issuing a new action.")
+
+    def _publish(self, temporary, payload, command, started):
+        destination = self.root / "command.json"
+        original = temporary.stat()
+        identity = (original.st_dev, original.st_ino, original.st_size)
+        deadline = started + min(PUBLICATION_RETRY_SECONDS, command["ttl_ms"] / 4000.0)
+        last_error = None
+        while True:
+            age_ms = int(time.time() * 1000) - command["sent_utc_ms"]
+            if time.monotonic() >= deadline or age_ms < -100 or command["ttl_ms"] - age_ms < PUBLICATION_MIN_REMAINING_MS:
+                if last_error is not None:
+                    raise last_error
+                raise RuntimeError("Command publication deadline expired before a safe rename; no action was published.")
+            try:
+                # CPython on Windows uses MoveFileExW(REPLACE_EXISTING), without
+                # a copy fallback. Source and destination are in the same folder.
+                os.replace(temporary, destination)
+                return  # Never rename again after a successful publication.
+            except OSError as error:
+                # Only these native failures may be transient read/share contention.
+                # Every other error, or inability to prove nonpublication, stops.
+                if getattr(error, "winerror", None) not in (5, 32, 33) or not self._unpublished(
+                        temporary, destination, payload, identity, command):
+                    raise
+                last_error = error
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise
+                time.sleep(min(0.01, remaining))
+
+    @staticmethod
+    def _unpublished(temporary, destination, payload, identity, command):
+        try:
+            source = temporary.stat()
+            if not source.st_ino or (source.st_dev, source.st_ino, source.st_size) != identity:
+                return False
+            if temporary.read_bytes() != payload:
+                return False
+            try:
+                published = json.loads(destination.read_bytes())
+            except FileNotFoundError:
+                return True
+            if not isinstance(published, dict):
+                return False
+            key = ("session", "mission", "seq")
+            return tuple(published.get(k) for k in key) != tuple(command[k] for k in key)
+        except (OSError, ValueError):
+            # Missing/mutated source or unreadable/already-published destination:
+            # the result is ambiguous, so do not republish anything.
+            return False
 
     def release(self):
         if self.context is not None:

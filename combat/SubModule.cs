@@ -36,6 +36,9 @@ namespace BannerlordCombatBridge
         protected override void OnApplicationTick(float dt)
         {
             base.OnApplicationTick(dt);
+            // A file-sharing race must not erase the only acknowledgment of an
+            // action already executed. Flush even after the mission has ended.
+            CombatFiles.FlushReply();
             // Mission ticks may stop behind menus. Wall-clock expiry still releases input.
             if (Active != null) Active.Watchdog();
             else if (CombatProtocol.NowMs() >= _nextIdle) WriteIdle();
@@ -59,6 +62,8 @@ namespace BannerlordCombatBridge
     internal static class CombatFiles
     {
         internal const string Root = @"C:\Users\Public\BannerlordCombatBridge";
+        private static string _pendingReply;
+        private static long _nextReplyAttempt;
         internal static string ReadCommand()
         {
             try
@@ -76,7 +81,7 @@ namespace BannerlordCombatBridge
             catch (DecoderFallbackException) { return "INVALID_UTF8"; }
         }
 
-        internal static void Write(string name, string json)
+        internal static bool Write(string name, string json)
         {
             string path = Path.Combine(Root, name);
             string temporary = path + ".tmp";
@@ -85,10 +90,30 @@ namespace BannerlordCombatBridge
                 File.WriteAllText(temporary, json, new UTF8Encoding(false));
                 if (File.Exists(path)) File.Replace(temporary, path, null);
                 else File.Move(temporary, path);
+                return true;
             }
-            catch (IOException) { /* Drop this sample; never sleep on the game thread. */ }
-            catch (UnauthorizedAccessException) { }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
             finally { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } }
+        }
+
+        internal static void QueueReply(string json)
+        {
+            // The command dispatcher calls this once after consuming/executing a
+            // new packet. Retrying publication never invokes that dispatcher.
+            // A later packet may supersede this reply; clients must use one writer.
+            _pendingReply = json;
+            _nextReplyAttempt = 0;
+            FlushReply();
+        }
+
+        internal static void FlushReply()
+        {
+            if (_pendingReply == null) return;
+            long now = CombatProtocol.NowMs();
+            if (now < _nextReplyAttempt) return;
+            _nextReplyAttempt = now + 20;
+            if (Write("response.json", _pendingReply)) _pendingReply = null;
         }
 
         internal static void Log(string message)
@@ -246,7 +271,7 @@ namespace BannerlordCombatBridge
 
         private void Reply(CombatCommand command, bool ok, string message)
         {
-            CombatFiles.Write("response.json", "{\"session\":" + CombatProtocol.Json(SubModule.Session) +
+            CombatFiles.QueueReply("{\"session\":" + CombatProtocol.Json(SubModule.Session) +
                 ",\"mission\":" + CombatProtocol.Json(command == null ? _token : command.mission) +
                 ",\"seq\":" + (command == null ? 0 : command.seq) + ",\"ok\":" + (ok ? "true" : "false") +
                 ",\"message\":" + CombatProtocol.Json(message) + ",\"updated_utc_ms\":" + CombatProtocol.NowMs() + "}");
@@ -299,14 +324,36 @@ namespace BannerlordCombatBridge
             Agent main = Mission.MainAgent;
             if (main != null && main.Team != null)
             {
-                // Bounded output in large battles. This is proximity, not line-of-sight.
+                // Keep the nearest agents, not the first agents in spawn order:
+                // otherwise a nearby attacker can disappear behind distant spawns.
+                // Memory and expensive detailed telemetry remain bounded to 32.
+                // Proximity is not proof of visibility or an unobstructed path.
+                Agent[] nearest = new Agent[32];
+                float[] distances = new float[32];
+                Vec3 mainPosition = main.Position;
                 foreach (Agent agent in Mission.Agents)
                 {
                     if (!agent.IsActive() || !agent.IsHuman || agent.Team == null || !main.Team.IsEnemyOf(agent.Team)) continue;
-                    if ((agent.Position - main.Position).LengthSquared > 10000f) continue;
-                    if (written++ != 0) json.Append(',');
-                    json.Append(AgentJson(agent));
-                    if (written == 32) break;
+                    float distanceSquared = (agent.Position - mainPosition).LengthSquared;
+                    if (float.IsNaN(distanceSquared) || float.IsInfinity(distanceSquared) || distanceSquared > 10000f) continue;
+                    int insert = written;
+                    while (insert > 0 && (distances[insert - 1] > distanceSquared ||
+                        (distances[insert - 1] == distanceSquared && nearest[insert - 1].Index > agent.Index)))
+                        insert--;
+                    if (insert >= nearest.Length) continue;
+                    for (int index = Math.Min(written, nearest.Length - 1); index > insert; index--)
+                    {
+                        nearest[index] = nearest[index - 1];
+                        distances[index] = distances[index - 1];
+                    }
+                    nearest[insert] = agent;
+                    distances[insert] = distanceSquared;
+                    written = Math.Min(written + 1, nearest.Length);
+                }
+                for (int index = 0; index < written; index++)
+                {
+                    if (index != 0) json.Append(',');
+                    json.Append(AgentJson(nearest[index]));
                 }
             }
             json.Append("],\"enemy_sample_limit\":32}");
@@ -322,7 +369,8 @@ namespace BannerlordCombatBridge
                 ",\"health\":" + CombatProtocol.Number(agent.Health) + ",\"active\":" + (agent.IsActive() ? "true" : "false") +
                 ",\"mounted\":" + (agent.MountAgent != null ? "true" : "false") +
                 ",\"position\":[" + CombatProtocol.Number(p.x) + "," + CombatProtocol.Number(p.y) + "," + CombatProtocol.Number(p.z) +
-                "],\"look\":[" + CombatProtocol.Number(look.x) + "," + CombatProtocol.Number(look.y) + "," + CombatProtocol.Number(look.z) + "]}";
+                "],\"look\":[" + CombatProtocol.Number(look.x) + "," + CombatProtocol.Number(look.y) + "," + CombatProtocol.Number(look.z) +
+                "],\"weapon\":" + CombatTelemetry.WeaponJson(agent) + ",\"attack\":" + CombatTelemetry.AttackJson(agent) + "}";
         }
 
         public void Shutdown(string reason)

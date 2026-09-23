@@ -21,7 +21,7 @@ foreach ($reference in $references) {
 $compilerArgs = @('/nologo', '/noconfig', '/nostdlib+', '/target:library',
     ('/out:' + (Join-Path $outputBin 'BannerlordCombatBridge.dll')))
 $compilerArgs += $references | ForEach-Object { '/reference:' + $_ }
-$compilerArgs += @('CombatProtocol.cs', 'PlayerInput.cs', 'FormationOrders.cs', 'SubModule.cs') | ForEach-Object { Join-Path $PSScriptRoot $_ }
+$compilerArgs += @('CombatProtocol.cs', 'PlayerInput.cs', 'FormationOrders.cs', 'CombatTelemetry.cs', 'SubModule.cs') | ForEach-Object { Join-Path $PSScriptRoot $_ }
 & 'C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe' @compilerArgs
 if ($LASTEXITCODE -ne 0) { throw 'Combat module compilation failed.' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'module\SubModule.xml') -Destination $output -Force
@@ -29,6 +29,8 @@ if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'README.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.md') -Destination $output -Force
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'combatctl.py') -Destination $output -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'combatpilot.py') -Destination $output -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'PILOT.md') -Destination $output -Force
 $archive = Join-Path $PSScriptRoot 'out\BannerlordCombatBridge-v0.1.0.zip'
 Compress-Archive -LiteralPath $output -DestinationPath $archive -Force
 Write-Output "Built package: $archive"

@@ -4,10 +4,12 @@ Separate, optional single-player module for Bannerlord **v1.4.8.119303**. It can
 coexist with Bannerlord Strategic Bridge. It does not change campaign bridge
 commands, save data, character stats, damage, or battle difficulty.
 
-This first version exposes character input and native troop orders. It is a
-control interface with a local timed-action client, not an autonomous combat AI.
-Compilation and offline checks do not establish successful battle behavior.
-An in-game custom-battle acceptance pass is still required.
+This version exposes character input, native troop orders, and a bounded local
+melee pilot. A connected assistant can choose tactics and run short goals while
+the local pilot handles movement, facing, swings and defensive reactions.
+See [the pilot guide](PILOT.md) for agent instructions and limitations. This is
+an experimental prototype; see the repository's
+[live-test status](https://github.com/Grosspa1/Bannerlord-AI-Control/blob/feature/realtime-combat-control/docs/REALTIME_COMBAT.md).
 
 ## Install and try
 
@@ -44,7 +46,8 @@ hit. The camera following programmatic aim still needs in-game verification.
 Attack/block directions are `up`, `down`, `left`, and `right`. Attack is held
 for the interval, then released as ordinary input; already committed swings
 cannot be undone. Manually equip a suitable weapon first. Weapon switching,
-horse control, siege engines and automatic targeting decisions are not included.
+horse control and siege engines are not included. The separate `combatpilot.py`
+client can select a nearby melee target and react during a bounded goal.
 
 For formations, first obtain the actual commandable formation `index` from
 `status`. Examples using index 0 (substitute the returned index):
