@@ -25,3 +25,20 @@ Typical commands:
 Deployment refuses to overwrite the bridge DLL while Bannerlord is running.
 
 See `docs/AGENT_HANDOFF.md` for the parallel-agent contribution model.
+
+## Party and economy commands
+
+The bridge now supports `troops`, `recruits` (`inspect_recruits`), `inventory`,
+`market`, `economy_status`, and guarded single-volunteer recruitment with
+`recruit_one`. Market inspection includes modified item stacks and current unit
+buy/sell quotes for both the market and player inventory.
+
+See [the command contract and disposable-save test plan](docs/PARTY_ECONOMY.md).
+These additions compile against the installed game assemblies and have offline
+regression coverage; live-save validation is still pending. Buying/selling,
+bulk recruitment, upgrades, and prisoner mutations are not exposed by this patch.
+
+```powershell
+.\bl-dev.ps1 build
+.\tests\Test-PartyEconomy.ps1
+```

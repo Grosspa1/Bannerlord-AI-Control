@@ -32,6 +32,25 @@ Target: **Mount & Blade II: Bannerlord v1.4.8.119303**
 - Current bridge polling is on Bannerlord's main thread at roughly 350 ms
 - Runtime specialist findings and test plan: \`AGENT_RUNTIME.md\`
 
+## Party / Economy continuation (2026-09-23)
+
+- Reviewed GitHub main at `48b0d1f` and the remote agent/runtime-reliability,
+  agent/state-telemetry, agent/world-diplomacy, and integration/v0.3 branches.
+  The specialist branches retain their original commit IDs; main includes their
+  contributions under separate integrated commits. No open PRs existed at the
+  start of this continuation.
+- The original build checkout remains on agent/world-diplomacy with uncommitted
+  SubModule.cs and compile_mono20.rsp edits plus ignored Party/Economy candidates.
+  Those files were preserved; they are not the integrated source of truth.
+- Work continues in the isolated `feature/party-economy-controls` branch and
+  `C:\Users\Public\BannerlordControllerBuild-party-economy` worktree.
+- The first slice adds recruitment inspection, guarded single recruitment,
+  troop/inventory inspection, native market quotes, and an economy summary.
+  [Command contract, verification, and remaining work](PARTY_ECONOMY.md).
+- No live game DLL, bridge command file, or save was changed. Deployment and
+  disposable-save validation remain pending; do not infer runtime success from
+  compilation or the offline suite.
+
 ## Safety
 
 Do not use surrender, war declarations, kingdom exits, destructive inventory operations, or other irreversible actions merely as API tests. Use read-only tests or disposable saves first.

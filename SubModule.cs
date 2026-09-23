@@ -287,14 +287,7 @@ namespace BannerlordStrategicBridge
 
         private static string J(string text)
         {
-            if (text == null) text = "";
-            string bs = ((char)92).ToString();
-            string q = ((char)34).ToString();
-            text = text.Replace(bs, bs + bs);
-            text = text.Replace(q, bs + "u0022");
-            text = text.Replace(((char)13).ToString(), bs + "r");
-            text = text.Replace(((char)10).ToString(), bs + "n");
-            return q + text + q;
+            return JsonText.Quote(text);
         }
 
         private static string Num(double x)
@@ -1671,7 +1664,7 @@ namespace BannerlordStrategicBridge
                 string message = "";
                 bool asynchronous = false;
                 bool readOnly = verb == "status" || verb == "list_saves" ||
-                    verb == "saves" || verb == "inspect";
+                    verb == "saves" || verb == "inspect" || PartyEconomyRules.IsReadOnly(verb);
                 if (!readOnly && IsPostBattleDecisionPending())
                     throw new InvalidOperationException("POST_BATTLE_DECISION_PENDING");
 
@@ -1741,6 +1734,10 @@ namespace BannerlordStrategicBridge
                     message = DoGracefulExit();
                 else if (verb == "inspect")
                     message = InspectType(arg);
+                else if (TryProcessPartyEconomyCommand(verb, arg, out message))
+                {
+                    // Domain commands use the existing journal and archived response path.
+                }
                 else
                     throw new InvalidOperationException("Unknown command: " + verb);
 

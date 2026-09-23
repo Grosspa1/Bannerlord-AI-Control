@@ -4,6 +4,13 @@
 !README.md
 !SubModule.cs
 !SubModule.State.cs
+!SubModule.PartyEconomy.cs
+!PartyEconomyRules.cs
+!JsonText.cs
+!tests/
+!tests/*.cs
+!tests/*.ps1
+!docs/PARTY_ECONOMY.md
 !compile_mono20.rsp
 !blctl.py
 !bl-dev.ps1
